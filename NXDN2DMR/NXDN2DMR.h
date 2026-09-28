@@ -96,13 +96,13 @@ private:
 	bool             m_xlxConnected;
 	CReflectors*     m_xlxReflectors;
 	unsigned int     m_xlxrefl;
-	unsigned int     m_defaultID;
 	bool             m_firstSync;
+	bool             m_dmrTx;
+	bool             m_nxdnTx;
 
 	bool createDMRNetwork();
 	unsigned int findNXDNID(unsigned int dmrid);
 	unsigned int findDMRID(unsigned int nxdnid);
-	unsigned int truncID(unsigned int id);
 	void writeXLXLink(unsigned int srcId, unsigned int dstId, CDMRNetwork* network);
 };
 

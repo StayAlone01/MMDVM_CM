@@ -132,8 +132,9 @@ m_xlxmodule(),
 m_xlxConnected(false),
 m_xlxReflectors(NULL),
 m_xlxrefl(0U),
-m_defaultID(65519U),
-m_firstSync(false)
+m_firstSync(false),
+m_dmrTx(false),
+m_nxdnTx(false)
 {
 	m_nxdnFrame = new unsigned char[200U];
 	m_dmrFrame  = new unsigned char[50U];
@@ -246,8 +247,6 @@ int CNXDN2DMR::run()
 	unsigned int dstPort     = m_conf.getDstPort();
 	std::string localAddress = m_conf.getLocalAddress();
 	unsigned int localPort   = m_conf.getLocalPort();
-
-	m_defaultID = m_conf.getDefaultID();
 
 	std::string fileName    = m_conf.getDMRXLXFile();
 	m_xlxReflectors = new CReflectors(fileName, 60U);
@@ -389,6 +388,9 @@ int CNXDN2DMR::run()
 				CDMRData rx_dmrdata;
 				dmr_cnt = 0U;
 				m_dmrSrc = findDMRID(m_nxdnSrc);
+				m_dmrTx = (m_dmrSrc != 0U);
+				if (!m_dmrTx)
+					LogWarning("Cannot find the DMR ID of NXDN ID %u, not sending to DMR", m_nxdnSrc);
 
 				rx_dmrdata.setSlotNo(2U);
 				rx_dmrdata.setSrcId(m_dmrSrc);
@@ -420,7 +422,8 @@ int CNXDN2DMR::run()
 
 				for (unsigned int i = 0U; i < 3U; i++) {
 					rx_dmrdata.setSeqNo(dmr_cnt);
-					m_dmrNetwork->write(rx_dmrdata);
+					if (m_dmrTx)
+						m_dmrNetwork->write(rx_dmrdata);
 					dmr_cnt++;
 				}
 
@@ -460,7 +463,8 @@ int CNXDN2DMR::run()
 						rx_dmrdata.setData(m_dmrFrame);
 
 						//CUtils::dump(1U, "DMR data:", m_dmrFrame, 33U);
-						m_dmrNetwork->write(rx_dmrdata);
+						if (m_dmrTx)
+							m_dmrNetwork->write(rx_dmrdata);
 
 						n_dmr++;
 						dmr_cnt++;
@@ -493,7 +497,8 @@ int CNXDN2DMR::run()
 
 				rx_dmrdata.setData(m_dmrFrame);
 				//CUtils::dump(1U, "DMR data:", m_dmrFrame, 33U);
-				m_dmrNetwork->write(rx_dmrdata);
+				if (m_dmrTx)
+					m_dmrNetwork->write(rx_dmrdata);
 
 				dmrWatch.start();
 			}
@@ -533,7 +538,8 @@ int CNXDN2DMR::run()
 				rx_dmrdata.setData(m_dmrFrame);
 				
 				//CUtils::dump(1U, "DMR data:", m_dmrFrame, 33U);
-				m_dmrNetwork->write(rx_dmrdata);
+				if (m_dmrTx)
+					m_dmrNetwork->write(rx_dmrdata);
 
 				dmr_cnt++;
 				dmrWatch.start();
@@ -630,6 +636,9 @@ int CNXDN2DMR::run()
 			if(nxdnFrameType == TAG_HEADER) {
 				nxdn_cnt = 0U;
 				m_nxdnSrc = findNXDNID(m_dmrSrc);
+				m_nxdnTx = (m_nxdnSrc != 0U);
+				if (!m_nxdnTx)
+					LogWarning("Cannot find the NXDN ID of DMR ID %u, not sending to NXDN", m_dmrSrc);
 
 				CNXDNLICH lich;
 				lich.setRFCT(NXDN_LICH_RFCT_RDCH);
@@ -656,7 +665,8 @@ int CNXDN2DMR::run()
 				::memcpy(m_nxdnFrame + 5U, layer3data, 14U);
 				::memcpy(m_nxdnFrame + 5U + 14U, layer3data, 14U);
 
-				m_nxdnNetwork->write(m_nxdnFrame, m_nxdnSrc, m_nxdnTG, true);
+				if (m_nxdnTx)
+					m_nxdnNetwork->write(m_nxdnFrame, m_nxdnSrc, m_nxdnTG, true);
 
 				nxdnWatch.start();
 			}
@@ -686,7 +696,8 @@ int CNXDN2DMR::run()
 				::memcpy(m_nxdnFrame + 5U, layer3data, 14U);
 				::memcpy(m_nxdnFrame + 5U + 14U, layer3data, 14U);
 
-				m_nxdnNetwork->write(m_nxdnFrame, m_nxdnSrc, m_nxdnTG, true);
+				if (m_nxdnTx)
+					m_nxdnNetwork->write(m_nxdnFrame, m_nxdnSrc, m_nxdnTG, true);
 
 				nxdn_cnt = 0U;
 			}
@@ -734,7 +745,8 @@ int CNXDN2DMR::run()
 				sacch.setRAN(0x01);
 				sacch.getRaw(m_nxdnFrame + 1U);
 
-				// Send data to MMDVMHost
+				if (m_nxdnTx)
+					// Send data to MMDVMHost
 				m_nxdnNetwork->write(m_nxdnFrame, m_nxdnSrc, m_nxdnTG, true);
 				
 				nxdn_cnt++;
@@ -784,10 +796,10 @@ unsigned int CNXDN2DMR::findNXDNID(unsigned int dmrid)
 	std::string dmrCS = m_dmrlookup->findCS(dmrid);
 	unsigned int nxdnID = m_nxdnlookup->findID(dmrCS);
 
-	if (nxdnID == 0)
-		nxdnID = truncID(dmrid);
-	else
-		LogMessage("NXDN ID of %s: %u", dmrCS.c_str(), nxdnID);
+	if (nxdnID == 0U)
+		return 0U;
+
+	LogMessage("Translated DMR ID %u (%s) to NXDN ID %u", dmrid, dmrCS.c_str(), nxdnID);
 
 	return nxdnID;
 }
@@ -797,25 +809,12 @@ unsigned int CNXDN2DMR::findDMRID(unsigned int nxdnid)
 	std::string nxdnCS = m_nxdnlookup->findCS(nxdnid);
 	unsigned int dmrID = m_dmrlookup->findID(nxdnCS);
 
-	if (dmrID == 0)
-		dmrID = m_defsrcid;
-	else
-		LogMessage("DMR ID of %s: %u", nxdnCS.c_str(), dmrID);
+	if (dmrID == 0U)
+		return 0U;
+
+	LogMessage("Translated NXDN ID %u (%s) to DMR ID %u", nxdnid, nxdnCS.c_str(), dmrID);
 
 	return dmrID;
-}
-
-unsigned int CNXDN2DMR::truncID(unsigned int id)
-{
-	char temp[20];
-
-	snprintf(temp, 8, "%07d", id);
-	unsigned int newid = atoi(temp + 2);
-
-	if (newid > 65519 || newid == 0)
-		newid = m_defaultID;
-
-	return newid;
 }
 
 bool CNXDN2DMR::createDMRNetwork()
