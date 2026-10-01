@@ -96,6 +96,7 @@ private:
 	bool             m_xlxConnected;
 	CReflectors*     m_xlxReflectors;
 	unsigned int     m_xlxrefl;
+	unsigned int     m_defaultID;
 	bool             m_firstSync;
 	bool             m_dmrTx;
 	bool             m_nxdnTx;

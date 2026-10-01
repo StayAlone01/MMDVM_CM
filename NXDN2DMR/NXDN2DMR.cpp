@@ -132,6 +132,7 @@ m_xlxmodule(),
 m_xlxConnected(false),
 m_xlxReflectors(NULL),
 m_xlxrefl(0U),
+m_defaultID(65519U),
 m_firstSync(false),
 m_dmrTx(false),
 m_nxdnTx(false)
@@ -247,6 +248,8 @@ int CNXDN2DMR::run()
 	unsigned int dstPort     = m_conf.getDstPort();
 	std::string localAddress = m_conf.getLocalAddress();
 	unsigned int localPort   = m_conf.getLocalPort();
+
+	m_defaultID = m_conf.getDefaultID();
 
 	std::string fileName    = m_conf.getDMRXLXFile();
 	m_xlxReflectors = new CReflectors(fileName, 60U);
@@ -796,8 +799,10 @@ unsigned int CNXDN2DMR::findNXDNID(unsigned int dmrid)
 	std::string dmrCS = m_dmrlookup->findCS(dmrid);
 	unsigned int nxdnID = m_nxdnlookup->findID(dmrCS);
 
-	if (nxdnID == 0U)
-		return 0U;
+	if (nxdnID == 0U) {
+		LogMessage("No NXDN ID found for DMR ID %u (%s), using default NXDN ID %u", dmrid, dmrCS.c_str(), m_defaultID);
+		return m_defaultID;
+	}
 
 	LogMessage("Translated DMR ID %u (%s) to NXDN ID %u", dmrid, dmrCS.c_str(), nxdnID);
 
