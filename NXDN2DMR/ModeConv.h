@@ -40,10 +40,9 @@ public:
 	unsigned int getDMR(unsigned char* data);
 
 private:
-	unsigned int m_nxdnN;
-	unsigned int m_dmrN;
 	CRingBuffer<unsigned char> m_NXDN;
 	CRingBuffer<unsigned char> m_DMR;
+	void addEntry(CRingBuffer<unsigned char>& buffer, const char* name, unsigned char tag, const unsigned char* data);
 	void encode(const unsigned char* in, unsigned char* out, unsigned int offset) const;
 	void decode(const unsigned char* in, unsigned char* out, unsigned int offset) const;
 };

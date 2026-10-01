@@ -454,8 +454,6 @@ const unsigned int C_TABLE[] = { 46U, 50U, 54U, 58U, 62U, 66U, 70U,  3U,  7U, 11
 const unsigned char AMBE_SILENCE[] = {0xB9U, 0xE8U, 0x81U, 0x52U, 0x61U, 0x73U, 0x00U, 0x2AU, 0x6BU};
 
 CModeConv::CModeConv() :
-m_nxdnN(0U),
-m_dmrN(0U),
 m_NXDN(5000U, "DMR2NXDN"),
 m_DMR(5000U, "NXDN2DMR")
 {
@@ -465,37 +463,48 @@ CModeConv::~CModeConv()
 {
 }
 
+// An entry is always a 1 byte tag followed by 9 bytes of payload. Add it only
+// when the whole entry fits, otherwise a nearly-full buffer would be cleared
+// between the two writes and the tag/payload alignment would break. The number
+// of entries in a buffer is derived from its data size (dataSize() / 10), so
+// the buffer itself is always the source of truth.
+void CModeConv::addEntry(CRingBuffer<unsigned char>& buffer, const char* name, unsigned char tag, const unsigned char* data)
+{
+	if (!buffer.hasSpace(10U)) {
+		LogError("%s buffer overflow, clearing the buffer", name);
+		buffer.clear();
+		return;
+	}
+
+	buffer.addData(&tag, 1U);
+	buffer.addData(data, 9U);
+}
+
 void CModeConv::putDMR(unsigned char* data)
 {
 	unsigned char v_ambe[9U];
 
 	assert(data != NULL);
 
-	m_NXDN.addData(&TAG_DATA, 1U);
-	m_NXDN.addData(data, 9U);
+	addEntry(m_NXDN, "DMR2NXDN", TAG_DATA, data);
 	//CUtils::dump(1U, "NXDN Voice:", data, 9U);
-	m_nxdnN += 1U;
-	
+
 	data += 9U;
 	for (unsigned int i = 0U; i < 4U; i++)
 		v_ambe[i] = data[i];
-	
+
 	v_ambe[4U] = data[4U] & 0xF0;
 	v_ambe[4U] |= data[10U] & 0x0F;
-	
+
 	for (unsigned int i = 0U; i < 4U; i++)
 		v_ambe[i + 5U] = data[i + 11U];
 
-	m_NXDN.addData(&TAG_DATA, 1U);
-	m_NXDN.addData(v_ambe, 9U);
+	addEntry(m_NXDN, "DMR2NXDN", TAG_DATA, v_ambe);
 	//CUtils::dump(1U, "NXDN Voice:", v_ambe, 9U);
-	m_nxdnN += 1U;
 
-	data += 15U;;
-	m_NXDN.addData(&TAG_DATA, 1U);
-	m_NXDN.addData(data, 9U);
+	data += 15U;
+	addEntry(m_NXDN, "DMR2NXDN", TAG_DATA, data);
 	//CUtils::dump(1U, "NXDN Voice:", data, 9U);
-	m_nxdnN += 1U;
 }
 
 void CModeConv::putNXDN(unsigned char* data)
@@ -506,24 +515,18 @@ void CModeConv::putNXDN(unsigned char* data)
 	data += 5U;
 
 	encode(data, vch, 0U);
-	m_DMR.addData(&TAG_DATA, 1U);
-	m_DMR.addData(vch, 9U);
+	addEntry(m_DMR, "NXDN2DMR", TAG_DATA, vch);
 
 	encode(data, vch, 49U);
-	m_DMR.addData(&TAG_DATA, 1U);
-	m_DMR.addData(vch, 9U);
+	addEntry(m_DMR, "NXDN2DMR", TAG_DATA, vch);
 
 	data += 14U;
 
 	encode(data, vch, 0U);
-	m_DMR.addData(&TAG_DATA, 1U);
-	m_DMR.addData(vch, 9U);
+	addEntry(m_DMR, "NXDN2DMR", TAG_DATA, vch);
 
 	encode(data, vch, 49U);
-	m_DMR.addData(&TAG_DATA, 1U);
-	m_DMR.addData(vch, 9U);
-
-	m_dmrN += 4U;
+	addEntry(m_DMR, "NXDN2DMR", TAG_DATA, vch);
 }
 
 void CModeConv::putDMRHeader()
@@ -532,9 +535,7 @@ void CModeConv::putDMRHeader()
 
 	::memset(vch, 0, 9U);
 
-	m_NXDN.addData(&TAG_HEADER, 1U);
-	m_NXDN.addData(vch, 9U);
-	m_nxdnN += 1U;
+	addEntry(m_NXDN, "DMR2NXDN", TAG_HEADER, vch);
 }
 
 void CModeConv::putDMREOT()
@@ -543,16 +544,12 @@ void CModeConv::putDMREOT()
 
 	::memset(vch, 0, 9U);
 	
-	unsigned int fill = 4U - (m_nxdnN % 4U);
-	for (unsigned int i = 0U; i < fill; i++) {
-		m_NXDN.addData(&TAG_DATA, 1U);
-		m_NXDN.addData(AMBE_SILENCE, 9U);
-		m_nxdnN += 1U;
-	}
+	unsigned int n = m_NXDN.dataSize() / 10U;
+	unsigned int fill = 4U - (n % 4U);
+	for (unsigned int i = 0U; i < fill; i++)
+		addEntry(m_NXDN, "DMR2NXDN", TAG_DATA, AMBE_SILENCE);
 
-	m_NXDN.addData(&TAG_EOT, 1U);
-	m_NXDN.addData(vch, 9U);
-	m_nxdnN += 1U;
+	addEntry(m_NXDN, "DMR2NXDN", TAG_EOT, vch);
 }
 
 void CModeConv::putNXDNHeader()
@@ -561,9 +558,7 @@ void CModeConv::putNXDNHeader()
 
 	::memset(v_dmr, 0U, 9U);
 
-	m_DMR.addData(&TAG_HEADER, 1U);
-	m_DMR.addData(v_dmr, 9U);
-	m_dmrN += 1U;
+	addEntry(m_DMR, "NXDN2DMR", TAG_HEADER, v_dmr);
 }
 
 void CModeConv::putNXDNEOT()
@@ -572,16 +567,12 @@ void CModeConv::putNXDNEOT()
 
 	::memset(v_dmr, 0U, 9U);
 	
-	unsigned int fill = 3U - (m_dmrN % 3U);
-	for (unsigned int i = 0U; i < fill; i++) {
-		m_DMR.addData(&TAG_DATA, 1U);
-		m_DMR.addData(AMBE_SILENCE, 9U);
-		m_dmrN += 1U;
-	}
+	unsigned int n = m_DMR.dataSize() / 10U;
+	unsigned int fill = 3U - (n % 3U);
+	for (unsigned int i = 0U; i < fill; i++)
+		addEntry(m_DMR, "NXDN2DMR", TAG_DATA, AMBE_SILENCE);
 
-	m_DMR.addData(&TAG_EOT, 1U);
-	m_DMR.addData(v_dmr, 9U);
-	m_dmrN += 1U;
+	addEntry(m_DMR, "NXDN2DMR", TAG_EOT, v_dmr);
 }
 
 unsigned int CModeConv::getDMR(unsigned char* data)
@@ -591,25 +582,24 @@ unsigned int CModeConv::getDMR(unsigned char* data)
 
 	tag[0U] = TAG_NODATA;
 
-	if (m_dmrN >= 1U) {
+	unsigned int n = m_DMR.dataSize() / 10U;
+
+	if (n >= 1U) {
 		m_DMR.peek(tag, 1U);
 
 		if (tag[0U] != TAG_DATA) {
 			m_DMR.getData(tag, 1U);
 			m_DMR.getData(data, 9U);
-			m_dmrN -= 1U;
 			return tag[0U];
 		}
 	}
 
-	if (m_dmrN >= 3U) {
+	if (n >= 3U) {
 		m_DMR.getData(tag, 1U);
 		m_DMR.getData(data, 9U);
-		m_dmrN -= 1U;
 
 		m_DMR.getData(tag, 1U);
 		m_DMR.getData(tmp, 9U);
-		m_dmrN -= 1U;
 
 		::memcpy(data + 9U, tmp, 4U);
 		data[13U] = tmp[4U] & 0xF0U;
@@ -618,7 +608,6 @@ unsigned int CModeConv::getDMR(unsigned char* data)
 
 		m_DMR.getData(tag, 1U);
 		m_DMR.getData(data + 24U, 9U);
-		m_dmrN -= 1U;
 
 		return TAG_DATA;
 	}
@@ -635,41 +624,38 @@ unsigned int CModeConv::getNXDN(unsigned char* data)
 
 	data += 5U;
 
-	if (m_nxdnN >= 1U) {
+	unsigned int n = m_NXDN.dataSize() / 10U;
+
+	if (n >= 1U) {
 		m_NXDN.peek(tag, 1U);
 
 		if (tag[0U] != TAG_DATA) {
 			m_NXDN.getData(tag, 1U);
 			m_NXDN.getData(vch, 9U);
-			m_nxdnN -= 1U;
 			return tag[0U];
 		}
 	}
 
 	::memset(data, 0U, 28U);
 
-	if (m_nxdnN >= 4U) {
+	if (n >= 4U) {
 		m_NXDN.getData(tag, 1U);
 		m_NXDN.getData(vch, 9U);
 		decode(vch, data, 0U);
-		m_nxdnN -= 1U;
 
 		m_NXDN.getData(tag, 1U);
 		m_NXDN.getData(vch, 9U);
 		decode(vch, data, 49U);
-		m_nxdnN -= 1U;
 
 		data += 14U;
 
 		m_NXDN.getData(tag, 1U);
 		m_NXDN.getData(vch, 9U);
 		decode(vch, data, 0U);
-		m_nxdnN -= 1U;
 
 		m_NXDN.getData(tag, 1U);
 		m_NXDN.getData(vch, 9U);
 		decode(vch, data, 49U);
-		m_nxdnN -= 1U;
 
 		return TAG_DATA;
 	}
