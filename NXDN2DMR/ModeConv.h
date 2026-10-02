@@ -38,6 +38,7 @@ public:
 
 	unsigned int getNXDN(unsigned char* data);
 	unsigned int getDMR(unsigned char* data);
+	unsigned int getDMRBacklog() const;
 
 private:
 	CRingBuffer<unsigned char> m_NXDN;

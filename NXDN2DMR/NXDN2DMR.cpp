@@ -634,127 +634,147 @@ int CNXDN2DMR::run()
 		}
 
 		if (nxdnWatch.elapsed() > NXDN_FRAME_PER) {
-			unsigned int nxdnFrameType = m_conv.getNXDN(m_nxdnFrame);
+			// When the DMR->NXDN conversion queue starts to back up, emit extra
+			// frames so it drains instead of eventually overflowing (and being
+			// cleared) during a long over. Below 20 queued entries the normal
+			// one frame per NXDN_FRAME_PER pacing is kept.
+			unsigned int nxdnFrames = 1U + m_conv.getDMRBacklog() / 20U;
+			if (nxdnFrames > 4U)
+				nxdnFrames = 4U;
 
-			if(nxdnFrameType == TAG_HEADER) {
-				nxdn_cnt = 0U;
-				m_nxdnSrc = findNXDNID(m_dmrSrc);
-				m_nxdnTx = (m_nxdnSrc != 0U);
-				if (!m_nxdnTx)
-					LogWarning("Cannot find the NXDN ID of DMR ID %u, not sending to NXDN", m_dmrSrc);
+			bool nxdnEmitted = false;
 
-				CNXDNLICH lich;
-				lich.setRFCT(NXDN_LICH_RFCT_RDCH);
-				lich.setFCT(NXDN_LICH_USC_SACCH_NS);
-				lich.setOption(NXDN_LICH_STEAL_FACCH);
-				lich.setDirection(NXDN_LICH_DIRECTION_INBOUND);
-				m_nxdnFrame[0U] = lich.getRaw();
+			for (unsigned int nxdnI = 0U; nxdnI < nxdnFrames; nxdnI++) {
+				unsigned int nxdnFrameType = m_conv.getNXDN(m_nxdnFrame);
 
-				CNXDNSACCH sacch;
-				sacch.setRAN(0x01);
-				sacch.setStructure(NXDN_SR_SINGLE);
-				sacch.setData(SACCH_IDLE);
-				sacch.getRaw(m_nxdnFrame + 1U);
+				if (nxdnFrameType == TAG_NODATA)
+					break;
 
-				unsigned char layer3data[25U];
-				CNXDNLayer3 layer3;
-				layer3.setMessageType(NXDN_MESSAGE_TYPE_VCALL);
-				layer3.setSourceUnitId(m_nxdnSrc & 0xFFFF);
-				layer3.setDestinationGroupId(m_nxdnTG & 0xFFFF);
-				layer3.setGroup(true);
-				layer3.setDataBlocks(0U);
-				layer3.getData(layer3data);
+				nxdnEmitted = true;
 
-				::memcpy(m_nxdnFrame + 5U, layer3data, 14U);
-				::memcpy(m_nxdnFrame + 5U + 14U, layer3data, 14U);
+				if(nxdnFrameType == TAG_HEADER) {
+					nxdn_cnt = 0U;
+					m_nxdnSrc = findNXDNID(m_dmrSrc);
+					m_nxdnTx = (m_nxdnSrc != 0U);
+					if (!m_nxdnTx)
+						LogWarning("Cannot find the NXDN ID of DMR ID %u, not sending to NXDN", m_dmrSrc);
 
-				if (m_nxdnTx)
-					m_nxdnNetwork->write(m_nxdnFrame, m_nxdnSrc, m_nxdnTG, true);
+					CNXDNLICH lich;
+					lich.setRFCT(NXDN_LICH_RFCT_RDCH);
+					lich.setFCT(NXDN_LICH_USC_SACCH_NS);
+					lich.setOption(NXDN_LICH_STEAL_FACCH);
+					lich.setDirection(NXDN_LICH_DIRECTION_INBOUND);
+					m_nxdnFrame[0U] = lich.getRaw();
 
-				nxdnWatch.start();
-			}
-			else if (nxdnFrameType == TAG_EOT) {
-				CNXDNLICH lich;
-				lich.setRFCT(NXDN_LICH_RFCT_RDCH);
-				lich.setFCT(NXDN_LICH_USC_SACCH_NS);
-				lich.setOption(NXDN_LICH_STEAL_FACCH);
-				lich.setDirection(NXDN_LICH_DIRECTION_INBOUND);
-				m_nxdnFrame[0U] = lich.getRaw();
+					CNXDNSACCH sacch;
+					sacch.setRAN(0x01);
+					sacch.setStructure(NXDN_SR_SINGLE);
+					sacch.setData(SACCH_IDLE);
+					sacch.getRaw(m_nxdnFrame + 1U);
 
-				CNXDNSACCH sacch;
-				sacch.setRAN(0x01);
-				sacch.setStructure(NXDN_SR_SINGLE);
-				sacch.setData(SACCH_IDLE);
-				sacch.getRaw(m_nxdnFrame + 1U);
+					unsigned char layer3data[25U];
+					CNXDNLayer3 layer3;
+					layer3.setMessageType(NXDN_MESSAGE_TYPE_VCALL);
+					layer3.setSourceUnitId(m_nxdnSrc & 0xFFFF);
+					layer3.setDestinationGroupId(m_nxdnTG & 0xFFFF);
+					layer3.setGroup(true);
+					layer3.setDataBlocks(0U);
+					layer3.getData(layer3data);
 
-				unsigned char layer3data[25U];
-				CNXDNLayer3 layer3;
-				layer3.setMessageType(NXDN_MESSAGE_TYPE_TX_REL);
-				layer3.setSourceUnitId(m_nxdnSrc & 0xFFFF);
-				layer3.setDestinationGroupId(m_nxdnTG & 0xFFFF);
-				layer3.setGroup(true);
-				layer3.setDataBlocks(0U);
-				layer3.getData(layer3data);
+					::memcpy(m_nxdnFrame + 5U, layer3data, 14U);
+					::memcpy(m_nxdnFrame + 5U + 14U, layer3data, 14U);
 
-				::memcpy(m_nxdnFrame + 5U, layer3data, 14U);
-				::memcpy(m_nxdnFrame + 5U + 14U, layer3data, 14U);
-
-				if (m_nxdnTx)
-					m_nxdnNetwork->write(m_nxdnFrame, m_nxdnSrc, m_nxdnTG, true);
-
-				nxdn_cnt = 0U;
-			}
-			else if (nxdnFrameType == TAG_DATA) {
-				CNXDNLICH lich;
-				lich.setRFCT(NXDN_LICH_RFCT_RDCH);
-				lich.setFCT(NXDN_LICH_USC_SACCH_SS);
-				lich.setOption(NXDN_LICH_STEAL_NONE);
-				lich.setDirection(NXDN_LICH_DIRECTION_INBOUND);
-				m_nxdnFrame[0U] = lich.getRaw();
-
-				CNXDNSACCH sacch;
-				CNXDNLayer3 layer3;
-				unsigned char message[3U];
-
-				layer3.setMessageType(NXDN_MESSAGE_TYPE_VCALL);
-				layer3.setSourceUnitId(m_nxdnSrc & 0xFFFF);
-				layer3.setDestinationGroupId(m_nxdnTG & 0xFFFF);
-				layer3.setGroup(true);
-				layer3.setDataBlocks(0U);
-
-				switch (nxdn_cnt % 4) {
-					case 0:
-						sacch.setStructure(NXDN_SR_1_4);
-						layer3.encode(message, 18U, 0U);
-						sacch.setData(message);
-						break;
-					case 1:
-						sacch.setStructure(NXDN_SR_2_4);
-						layer3.encode(message, 18U, 18U);
-						sacch.setData(message);
-						break;
-					case 2:
-						sacch.setStructure(NXDN_SR_3_4);
-						layer3.encode(message, 18U, 36U);
-						sacch.setData(message);
-						break;
-					case 3:
-						sacch.setStructure(NXDN_SR_4_4);
-						layer3.encode(message, 18U, 54U);
-						sacch.setData(message);
-						break;
+					if (m_nxdnTx)
+						m_nxdnNetwork->write(m_nxdnFrame, m_nxdnSrc, m_nxdnTG, true);
 				}
+				else if (nxdnFrameType == TAG_EOT) {
+					CNXDNLICH lich;
+					lich.setRFCT(NXDN_LICH_RFCT_RDCH);
+					lich.setFCT(NXDN_LICH_USC_SACCH_NS);
+					lich.setOption(NXDN_LICH_STEAL_FACCH);
+					lich.setDirection(NXDN_LICH_DIRECTION_INBOUND);
+					m_nxdnFrame[0U] = lich.getRaw();
 
-				sacch.setRAN(0x01);
-				sacch.getRaw(m_nxdnFrame + 1U);
+					CNXDNSACCH sacch;
+					sacch.setRAN(0x01);
+					sacch.setStructure(NXDN_SR_SINGLE);
+					sacch.setData(SACCH_IDLE);
+					sacch.getRaw(m_nxdnFrame + 1U);
 
-				if (m_nxdnTx)
-					// Send data to MMDVMHost
-				m_nxdnNetwork->write(m_nxdnFrame, m_nxdnSrc, m_nxdnTG, true);
-				
-				nxdn_cnt++;
-				nxdnWatch.start();
+					unsigned char layer3data[25U];
+					CNXDNLayer3 layer3;
+					layer3.setMessageType(NXDN_MESSAGE_TYPE_TX_REL);
+					layer3.setSourceUnitId(m_nxdnSrc & 0xFFFF);
+					layer3.setDestinationGroupId(m_nxdnTG & 0xFFFF);
+					layer3.setGroup(true);
+					layer3.setDataBlocks(0U);
+					layer3.getData(layer3data);
+
+					::memcpy(m_nxdnFrame + 5U, layer3data, 14U);
+					::memcpy(m_nxdnFrame + 5U + 14U, layer3data, 14U);
+
+					if (m_nxdnTx)
+						m_nxdnNetwork->write(m_nxdnFrame, m_nxdnSrc, m_nxdnTG, true);
+
+					nxdn_cnt = 0U;
+				}
+				else if (nxdnFrameType == TAG_DATA) {
+					CNXDNLICH lich;
+					lich.setRFCT(NXDN_LICH_RFCT_RDCH);
+					lich.setFCT(NXDN_LICH_USC_SACCH_SS);
+					lich.setOption(NXDN_LICH_STEAL_NONE);
+					lich.setDirection(NXDN_LICH_DIRECTION_INBOUND);
+					m_nxdnFrame[0U] = lich.getRaw();
+
+					CNXDNSACCH sacch;
+					CNXDNLayer3 layer3;
+					unsigned char message[3U];
+
+					layer3.setMessageType(NXDN_MESSAGE_TYPE_VCALL);
+					layer3.setSourceUnitId(m_nxdnSrc & 0xFFFF);
+					layer3.setDestinationGroupId(m_nxdnTG & 0xFFFF);
+					layer3.setGroup(true);
+					layer3.setDataBlocks(0U);
+
+					switch (nxdn_cnt % 4) {
+						case 0:
+							sacch.setStructure(NXDN_SR_1_4);
+							layer3.encode(message, 18U, 0U);
+							sacch.setData(message);
+							break;
+						case 1:
+							sacch.setStructure(NXDN_SR_2_4);
+							layer3.encode(message, 18U, 18U);
+							sacch.setData(message);
+							break;
+						case 2:
+							sacch.setStructure(NXDN_SR_3_4);
+							layer3.encode(message, 18U, 36U);
+							sacch.setData(message);
+							break;
+						case 3:
+							sacch.setStructure(NXDN_SR_4_4);
+							layer3.encode(message, 18U, 54U);
+							sacch.setData(message);
+							break;
+					}
+
+					sacch.setRAN(0x01);
+					sacch.getRaw(m_nxdnFrame + 1U);
+
+					if (m_nxdnTx) {
+						// Send data to MMDVMHost
+						m_nxdnNetwork->write(m_nxdnFrame, m_nxdnSrc, m_nxdnTG, true);
+					}
+
+					nxdn_cnt++;
+				}
 			}
+
+			// Only re-arm the pacing timer if we actually produced a frame, so a
+			// temporarily empty queue is retried on the next loop pass.
+			if (nxdnEmitted)
+				nxdnWatch.start();
 		}
 
 		stopWatch.start();
