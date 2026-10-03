@@ -385,168 +385,186 @@ int CNXDN2DMR::run()
 		}
 
 		if (dmrWatch.elapsed() > DMR_FRAME_PER) {
-			unsigned int dmrFrameType = m_conv.getDMR(m_dmrFrame);
+			// Mirror of the NXDN output drain: when the NXDN->DMR conversion
+			// queue starts to back up, emit extra frames so it drains instead
+			// of growing (which would show up as increasing latency during a
+			// long over). Below 20 queued entries the normal one frame per
+			// DMR_FRAME_PER pacing is kept.
+			unsigned int dmrFrames = 1U + m_conv.getNXDNBacklog() / 20U;
+			if (dmrFrames > 4U)
+				dmrFrames = 4U;
 
-			if(dmrFrameType == TAG_HEADER) {
-				CDMRData rx_dmrdata;
-				dmr_cnt = 0U;
-				m_dmrSrc = findDMRID(m_nxdnSrc);
-				m_dmrTx = (m_dmrSrc != 0U);
-				if (!m_dmrTx)
-					LogWarning("Cannot find the DMR ID of NXDN ID %u, not sending to DMR", m_nxdnSrc);
+			bool dmrEmitted = false;
 
-				rx_dmrdata.setSlotNo(2U);
-				rx_dmrdata.setSrcId(m_dmrSrc);
-				rx_dmrdata.setDstId(m_dstid);
-				rx_dmrdata.setFLCO(m_dmrflco);
-				rx_dmrdata.setN(0U);
-				rx_dmrdata.setSeqNo(0U);
-				rx_dmrdata.setBER(0U);
-				rx_dmrdata.setRSSI(0U);
-				rx_dmrdata.setDataType(DT_VOICE_LC_HEADER);
+			for (unsigned int dmrI = 0U; dmrI < dmrFrames; dmrI++) {
+				unsigned int dmrFrameType = m_conv.getDMR(m_dmrFrame);
 
-				// Add sync
-				CSync::addDMRDataSync(m_dmrFrame, 0);
+				if (dmrFrameType == TAG_NODATA)
+					break;
 
-				// Add SlotType
-				CDMRSlotType slotType;
-				slotType.setColorCode(m_colorcode);
-				slotType.setDataType(DT_VOICE_LC_HEADER);
-				slotType.getData(m_dmrFrame);
+				dmrEmitted = true;
 
-				// Full LC
-				CDMRLC dmrLC = CDMRLC(m_dmrflco, m_dmrSrc, m_dstid);
-				CDMRFullLC fullLC;
-				fullLC.encode(dmrLC, m_dmrFrame, DT_VOICE_LC_HEADER);
-				m_EmbeddedLC.setLC(dmrLC);
-				
-				rx_dmrdata.setData(m_dmrFrame);
-				//CUtils::dump(1U, "DMR data:", m_dmrFrame, 33U);
+				if(dmrFrameType == TAG_HEADER) {
+					CDMRData rx_dmrdata;
+					dmr_cnt = 0U;
+					m_dmrSrc = findDMRID(m_nxdnSrc);
+					m_dmrTx = (m_dmrSrc != 0U);
+					if (!m_dmrTx)
+						LogWarning("Cannot find the DMR ID of NXDN ID %u, not sending to DMR", m_nxdnSrc);
 
-				for (unsigned int i = 0U; i < 3U; i++) {
+					rx_dmrdata.setSlotNo(2U);
+					rx_dmrdata.setSrcId(m_dmrSrc);
+					rx_dmrdata.setDstId(m_dstid);
+					rx_dmrdata.setFLCO(m_dmrflco);
+					rx_dmrdata.setN(0U);
+					rx_dmrdata.setSeqNo(0U);
+					rx_dmrdata.setBER(0U);
+					rx_dmrdata.setRSSI(0U);
+					rx_dmrdata.setDataType(DT_VOICE_LC_HEADER);
+
+					// Add sync
+					CSync::addDMRDataSync(m_dmrFrame, 0);
+
+					// Add SlotType
+					CDMRSlotType slotType;
+					slotType.setColorCode(m_colorcode);
+					slotType.setDataType(DT_VOICE_LC_HEADER);
+					slotType.getData(m_dmrFrame);
+
+					// Full LC
+					CDMRLC dmrLC = CDMRLC(m_dmrflco, m_dmrSrc, m_dstid);
+					CDMRFullLC fullLC;
+					fullLC.encode(dmrLC, m_dmrFrame, DT_VOICE_LC_HEADER);
+					m_EmbeddedLC.setLC(dmrLC);
+
+					rx_dmrdata.setData(m_dmrFrame);
+					//CUtils::dump(1U, "DMR data:", m_dmrFrame, 33U);
+
+					for (unsigned int i = 0U; i < 3U; i++) {
+						rx_dmrdata.setSeqNo(dmr_cnt);
+						if (m_dmrTx)
+							m_dmrNetwork->write(rx_dmrdata);
+						dmr_cnt++;
+					}
+				}
+				else if(dmrFrameType == TAG_EOT) {
+					CDMRData rx_dmrdata;
+					unsigned int n_dmr = (dmr_cnt - 3U) % 6U;
+					unsigned int fill = (6U - n_dmr);
+
+					if (n_dmr) {
+						for (unsigned int i = 0U; i < fill; i++) {
+
+							CDMREMB emb;
+							CDMRData rx_dmrdata;
+
+							rx_dmrdata.setSlotNo(2U);
+							rx_dmrdata.setSrcId(m_dmrSrc);
+							rx_dmrdata.setDstId(m_dstid);
+							rx_dmrdata.setFLCO(m_dmrflco);
+							rx_dmrdata.setN(n_dmr);
+							rx_dmrdata.setSeqNo(dmr_cnt);
+							rx_dmrdata.setBER(0U);
+							rx_dmrdata.setRSSI(0U);
+							rx_dmrdata.setDataType(DT_VOICE);
+
+							::memcpy(m_dmrFrame, DMR_SILENCE_DATA, DMR_FRAME_LENGTH_BYTES);
+
+							// Generate the Embedded LC
+							unsigned char lcss = m_EmbeddedLC.getData(m_dmrFrame, n_dmr);
+
+							// Generate the EMB
+							emb.setColorCode(m_colorcode);
+							emb.setLCSS(lcss);
+							emb.getData(m_dmrFrame);
+
+							rx_dmrdata.setData(m_dmrFrame);
+
+							//CUtils::dump(1U, "DMR data:", m_dmrFrame, 33U);
+							if (m_dmrTx)
+								m_dmrNetwork->write(rx_dmrdata);
+
+							n_dmr++;
+							dmr_cnt++;
+						}
+					}
+
+					rx_dmrdata.setSlotNo(2U);
+					rx_dmrdata.setSrcId(m_dmrSrc);
+					rx_dmrdata.setDstId(m_dstid);
+					rx_dmrdata.setFLCO(m_dmrflco);
+					rx_dmrdata.setN(n_dmr);
 					rx_dmrdata.setSeqNo(dmr_cnt);
+					rx_dmrdata.setBER(0U);
+					rx_dmrdata.setRSSI(0U);
+					rx_dmrdata.setDataType(DT_TERMINATOR_WITH_LC);
+
+					// Add sync
+					CSync::addDMRDataSync(m_dmrFrame, 0);
+
+					// Add SlotType
+					CDMRSlotType slotType;
+					slotType.setColorCode(m_colorcode);
+					slotType.setDataType(DT_TERMINATOR_WITH_LC);
+					slotType.getData(m_dmrFrame);
+
+					// Full LC
+					CDMRLC dmrLC = CDMRLC(m_dmrflco, m_dmrSrc, m_dstid);
+					CDMRFullLC fullLC;
+					fullLC.encode(dmrLC, m_dmrFrame, DT_TERMINATOR_WITH_LC);
+
+					rx_dmrdata.setData(m_dmrFrame);
+					//CUtils::dump(1U, "DMR data:", m_dmrFrame, 33U);
 					if (m_dmrTx)
 						m_dmrNetwork->write(rx_dmrdata);
-					dmr_cnt++;
 				}
+				else if(dmrFrameType == TAG_DATA) {
+					CDMREMB emb;
+					CDMRData rx_dmrdata;
+					unsigned int n_dmr = (dmr_cnt - 3U) % 6U;
 
-				dmrWatch.start();
-			}
-			else if(dmrFrameType == TAG_EOT) {
-				CDMRData rx_dmrdata;
-				unsigned int n_dmr = (dmr_cnt - 3U) % 6U;
-				unsigned int fill = (6U - n_dmr);
-				
-				if (n_dmr) {
-					for (unsigned int i = 0U; i < fill; i++) {
+					rx_dmrdata.setSlotNo(2U);
+					rx_dmrdata.setSrcId(m_dmrSrc);
+					rx_dmrdata.setDstId(m_dstid);
+					rx_dmrdata.setFLCO(m_dmrflco);
+					rx_dmrdata.setN(n_dmr);
+					rx_dmrdata.setSeqNo(dmr_cnt);
+					rx_dmrdata.setBER(0U);
+					rx_dmrdata.setRSSI(0U);
 
-						CDMREMB emb;
-						CDMRData rx_dmrdata;
-
-						rx_dmrdata.setSlotNo(2U);
-						rx_dmrdata.setSrcId(m_dmrSrc);
-						rx_dmrdata.setDstId(m_dstid);
-						rx_dmrdata.setFLCO(m_dmrflco);
-						rx_dmrdata.setN(n_dmr);
-						rx_dmrdata.setSeqNo(dmr_cnt);
-						rx_dmrdata.setBER(0U);
-						rx_dmrdata.setRSSI(0U);
+					if (!n_dmr) {
+						rx_dmrdata.setDataType(DT_VOICE_SYNC);
+						// Add sync
+						CSync::addDMRAudioSync(m_dmrFrame, 0U);
+						// Prepare Full LC data
+						CDMRLC dmrLC = CDMRLC(m_dmrflco, m_dmrSrc, m_dstid);
+						// Configure the Embedded LC
+						m_EmbeddedLC.setLC(dmrLC);
+					}
+					else {
 						rx_dmrdata.setDataType(DT_VOICE);
-
-						::memcpy(m_dmrFrame, DMR_SILENCE_DATA, DMR_FRAME_LENGTH_BYTES);
-
 						// Generate the Embedded LC
 						unsigned char lcss = m_EmbeddedLC.getData(m_dmrFrame, n_dmr);
-
 						// Generate the EMB
 						emb.setColorCode(m_colorcode);
 						emb.setLCSS(lcss);
 						emb.getData(m_dmrFrame);
-
-						rx_dmrdata.setData(m_dmrFrame);
-
-						//CUtils::dump(1U, "DMR data:", m_dmrFrame, 33U);
-						if (m_dmrTx)
-							m_dmrNetwork->write(rx_dmrdata);
-
-						n_dmr++;
-						dmr_cnt++;
 					}
+
+					rx_dmrdata.setData(m_dmrFrame);
+
+					//CUtils::dump(1U, "DMR data:", m_dmrFrame, 33U);
+					if (m_dmrTx)
+						m_dmrNetwork->write(rx_dmrdata);
+
+					dmr_cnt++;
 				}
-
-				rx_dmrdata.setSlotNo(2U);
-				rx_dmrdata.setSrcId(m_dmrSrc);
-				rx_dmrdata.setDstId(m_dstid);
-				rx_dmrdata.setFLCO(m_dmrflco);
-				rx_dmrdata.setN(n_dmr);
-				rx_dmrdata.setSeqNo(dmr_cnt);
-				rx_dmrdata.setBER(0U);
-				rx_dmrdata.setRSSI(0U);
-				rx_dmrdata.setDataType(DT_TERMINATOR_WITH_LC);
-
-				// Add sync
-				CSync::addDMRDataSync(m_dmrFrame, 0);
-
-				// Add SlotType
-				CDMRSlotType slotType;
-				slotType.setColorCode(m_colorcode);
-				slotType.setDataType(DT_TERMINATOR_WITH_LC);
-				slotType.getData(m_dmrFrame);
-
-				// Full LC
-				CDMRLC dmrLC = CDMRLC(m_dmrflco, m_dmrSrc, m_dstid);
-				CDMRFullLC fullLC;
-				fullLC.encode(dmrLC, m_dmrFrame, DT_TERMINATOR_WITH_LC);
-
-				rx_dmrdata.setData(m_dmrFrame);
-				//CUtils::dump(1U, "DMR data:", m_dmrFrame, 33U);
-				if (m_dmrTx)
-					m_dmrNetwork->write(rx_dmrdata);
-
-				dmrWatch.start();
 			}
-			else if(dmrFrameType == TAG_DATA) {
-				CDMREMB emb;
-				CDMRData rx_dmrdata;
-				unsigned int n_dmr = (dmr_cnt - 3U) % 6U;
 
-				rx_dmrdata.setSlotNo(2U);
-				rx_dmrdata.setSrcId(m_dmrSrc);
-				rx_dmrdata.setDstId(m_dstid);
-				rx_dmrdata.setFLCO(m_dmrflco);
-				rx_dmrdata.setN(n_dmr);
-				rx_dmrdata.setSeqNo(dmr_cnt);
-				rx_dmrdata.setBER(0U);
-				rx_dmrdata.setRSSI(0U);
-			
-				if (!n_dmr) {
-					rx_dmrdata.setDataType(DT_VOICE_SYNC);
-					// Add sync
-					CSync::addDMRAudioSync(m_dmrFrame, 0U);
-					// Prepare Full LC data
-					CDMRLC dmrLC = CDMRLC(m_dmrflco, m_dmrSrc, m_dstid);
-					// Configure the Embedded LC
-					m_EmbeddedLC.setLC(dmrLC);
-				}
-				else {
-					rx_dmrdata.setDataType(DT_VOICE);
-					// Generate the Embedded LC
-					unsigned char lcss = m_EmbeddedLC.getData(m_dmrFrame, n_dmr);
-					// Generate the EMB
-					emb.setColorCode(m_colorcode);
-					emb.setLCSS(lcss);
-					emb.getData(m_dmrFrame);
-				}
-
-				rx_dmrdata.setData(m_dmrFrame);
-				
-				//CUtils::dump(1U, "DMR data:", m_dmrFrame, 33U);
-				if (m_dmrTx)
-					m_dmrNetwork->write(rx_dmrdata);
-
-				dmr_cnt++;
+			// Only re-arm the pacing timer if we actually produced a frame, so a
+			// temporarily starved queue is retried on the next loop pass.
+			if (dmrEmitted)
 				dmrWatch.start();
-			}
 		}
 
 		while (m_dmrNetwork->read(tx_dmrdata) > 0U) {

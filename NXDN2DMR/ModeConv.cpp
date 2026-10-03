@@ -621,6 +621,12 @@ unsigned int CModeConv::getDMRBacklog() const
 	return m_NXDN.dataSize() / 10U;
 }
 
+// Number of NXDN->DMR entries currently queued in the converter.
+unsigned int CModeConv::getNXDNBacklog() const
+{
+	return m_DMR.dataSize() / 10U;
+}
+
 unsigned int CModeConv::getNXDN(unsigned char* data)
 {
 	unsigned char tag[1U];
