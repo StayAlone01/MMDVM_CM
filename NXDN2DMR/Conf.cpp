@@ -47,6 +47,7 @@ m_localAddress(),
 m_localPort(0U),
 m_defaultID(65519U),
 m_daemon(false),
+m_nxdnNetworkJitter(0U),
 m_rxFrequency(0U),
 m_txFrequency(0U),
 m_power(0U),
@@ -155,6 +156,8 @@ bool CConf::read()
 				m_defaultID = (unsigned int)::atoi(value);
 			else if (::strcmp(key, "Daemon") == 0)
 				m_daemon = ::atoi(value) == 1;
+			else if (::strcmp(key, "Jitter") == 0)
+				m_nxdnNetworkJitter = (unsigned int)::atoi(value);
 		} else if (section == SECTION_INFO) {
 			if (::strcmp(key, "TXFrequency") == 0)
 				m_txFrequency = (unsigned int)::atoi(value);
@@ -271,6 +274,11 @@ unsigned int CConf::getDefaultID() const
 bool CConf::getDaemon() const
 {
 	return m_daemon;
+}
+
+unsigned int CConf::getNXDNNetworkJitter() const
+{
+	return m_nxdnNetworkJitter;
 }
 
 unsigned int CConf::getRxFrequency() const

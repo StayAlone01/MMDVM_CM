@@ -32,6 +32,10 @@
 #define DMR_FRAME_PER       55U
 #define NXDN_FRAME_PER      75U
 
+// The NXDN voice frame period, i.e. how often a NXDN voice packet is expected
+// to arrive. Derived from the 12.5 frames/second used in the logs.
+#define NXDN_FRAME_TIME     80U
+
 #define NXDNGW_DSTID_DEF    20U
 
 #define XLX_SLOT            2U
@@ -248,6 +252,7 @@ int CNXDN2DMR::run()
 	unsigned int dstPort     = m_conf.getDstPort();
 	std::string localAddress = m_conf.getLocalAddress();
 	unsigned int localPort   = m_conf.getLocalPort();
+	unsigned int nxdnJitter  = m_conf.getNXDNNetworkJitter();
 
 	m_defaultID = m_conf.getDefaultID();
 
@@ -255,7 +260,14 @@ int CNXDN2DMR::run()
 	m_xlxReflectors = new CReflectors(fileName, 60U);
 	m_xlxReflectors->load();
 
-	m_nxdnNetwork = new CNXDNNetwork(localAddress, localPort, m_callsign, debug);
+	LogMessage("NXDN Network Parameters");
+	LogMessage("    Destination: %s:%u", m_conf.getDstAddress().c_str(), dstPort);
+	if (nxdnJitter > 0U)
+		LogMessage("    Jitter: %ums", nxdnJitter);
+	else
+		LogMessage("    Jitter: disabled");
+
+	m_nxdnNetwork = new CNXDNNetwork(localAddress, localPort, m_callsign, debug, nxdnJitter);
 	m_nxdnNetwork->setDestination(dstAddress, dstPort);
 
 	ret = m_nxdnNetwork->open();
@@ -301,6 +313,15 @@ int CNXDN2DMR::run()
 	nxdnWatch.start();
 	dmrWatch.start();
 	pollTimer.start();
+
+	// Concealment for the NXDN -> DMR direction when the receive jitter buffer
+	// is disabled (NXDN Network Jitter = 0). These hold the last voice packet
+	// and when it was converted, so a lost or late packet can be filled in by
+	// repeating it instead of leaving a hole in the DMR output.
+	CStopWatch nxdnRxWatch;
+	unsigned char nxdnLastFrame[50U];
+	bool nxdnLastValid = false;
+	nxdnRxWatch.start();
 
 	unsigned char nxdn_cnt = 0;
 	unsigned char dmr_cnt = 0;
@@ -349,6 +370,8 @@ int CNXDN2DMR::run()
 						m_conv.putNXDNEOT();
 						m_nxdnFrames = 0U;
 						m_nxdninfo = false;
+						nxdnLastValid = false;
+						m_nxdnNetwork->reset();
 					} else {
 						std::string netSrc = m_nxdnlookup->findCS(m_nxdnSrc);
 						std::string netDst = m_nxdnlookup->findCS(m_nxdnDst);
@@ -359,6 +382,7 @@ int CNXDN2DMR::run()
 						m_conv.putNXDNHeader();
 						m_nxdnFrames = 0U;
 						m_nxdninfo = true;
+						nxdnLastValid = false;
 					}
 				} else {
 					if (opt == NXDN_LICH_STEAL_NONE) {
@@ -371,10 +395,17 @@ int CNXDN2DMR::run()
 
 							m_conv.putNXDNHeader();
 							m_nxdninfo = true;
+							nxdnLastValid = false;
 						}
 
 						m_conv.putNXDN(buffer + 10U);
 						m_nxdnFrames++;
+
+						// Remember this voice packet and when it arrived, so it
+						// can be repeated if the next one is lost or late.
+						::memcpy(nxdnLastFrame, buffer, len);
+						nxdnLastValid = true;
+						nxdnRxWatch.start();
 					}
 				}
 			}
@@ -382,6 +413,17 @@ int CNXDN2DMR::run()
 					// Return the poll
 					m_nxdnNetwork->write(buffer, len);
 			}
+		}
+
+		// NXDN receive concealment, used when no jitter buffer is configured
+		// (Jitter = 0). If the next voice packet is overdue while a transmission
+		// is live, feed the last one in again so the DMR output gets a frame
+		// instead of a hole. It is only repeated once per gap, the arrival of a
+		// fresh packet re-arms it.
+		if (nxdnJitter == 0U && m_nxdninfo && nxdnLastValid && nxdnRxWatch.elapsed() >= NXDN_FRAME_TIME) {
+			LogDebug("NXDN, no voice packet for %ums, repeating the last one", nxdnRxWatch.elapsed());
+			m_conv.putNXDN(nxdnLastFrame + 10U);
+			nxdnLastValid = false;
 		}
 
 		if (dmrWatch.elapsed() > DMR_FRAME_PER) {
@@ -798,6 +840,7 @@ int CNXDN2DMR::run()
 		stopWatch.start();
 
 		m_dmrNetwork->clock(ms);
+		m_nxdnNetwork->clock(ms);
 
 		if (m_xlxReflectors != NULL)
 			m_xlxReflectors->clock(ms);

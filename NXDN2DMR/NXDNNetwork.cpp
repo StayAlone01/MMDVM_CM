@@ -27,18 +27,41 @@
 
 const unsigned int BUFFER_LENGTH = 200U;
 
-CNXDNNetwork::CNXDNNetwork(const std::string& address, unsigned int port, const std::string& callsign, bool debug) :
+// The NXDN voice frame period, matching the 12.5 frames/second used elsewhere
+// in the converter. It is the rate at which the receive jitter buffer releases
+// frames and repeats the last one when a frame does not arrive in time.
+const unsigned int NXDN_FRAME_TIME = 80U;
+
+// The length of a NXDN voice data packet (NXDND) as passed over the network.
+const unsigned int NXDN_VOICE_LENGTH = 43U;
+
+// The length of a NXDN poll packet (NXDNP).
+const unsigned int NXDN_POLL_LENGTH = 17U;
+
+CNXDNNetwork::CNXDNNetwork(const std::string& address, unsigned int port, const std::string& callsign, bool debug, unsigned int jitter) :
 m_socket(address, port),
 m_callsign(callsign),
 m_debug(debug),
 m_address(),
-m_port(0U)
+m_port(0U),
+m_jitter(jitter),
+m_delayBuffer(NULL),
+m_buffer(NULL)
 {
 	m_callsign.resize(10U, ' ');
+
+	// A Jitter value of 0 disables the receive jitter buffer entirely, so the
+	// converter behaves exactly as it did before it existed.
+	if (m_jitter > 0U) {
+		m_buffer      = new unsigned char[BUFFER_LENGTH];
+		m_delayBuffer = new CDelayBuffer("NXDN", NXDN_VOICE_LENGTH, NXDN_FRAME_TIME, m_jitter, m_debug, true);
+	}
 }
 
 CNXDNNetwork::~CNXDNNetwork()
 {
+	delete m_delayBuffer;
+	delete[] m_buffer;
 }
 
 bool CNXDNNetwork::open()
@@ -112,21 +135,67 @@ unsigned int CNXDNNetwork::read(unsigned char* data)
 	in_addr address;
 	unsigned int port;
 
-	int len = m_socket.read(data, BUFFER_LENGTH, address, port);
-	if (len <= 0)
-		return 0U;
+	// Without a jitter buffer the socket data is handed back untouched, like it
+	// was before the buffer existed.
+	if (m_delayBuffer == NULL) {
+		int len = m_socket.read(data, BUFFER_LENGTH, address, port);
+		if (len <= 0)
+			return 0U;
 
-	// Invalid packet type?
-	if (::memcmp(data, "NXDN", 4U) != 0)
-		return 0U;
+		// Invalid packet type?
+		if (::memcmp(data, "NXDN", 4U) != 0)
+			return 0U;
 
-	if (len != 17 && len != 43)
-		return 0U;
+		if (len != 17 && len != 43)
+			return 0U;
 
-	if (m_debug)
-		CUtils::dump(1U, "NXDN Network Data Received", data, len);
+		if (m_debug)
+			CUtils::dump(1U, "NXDN Network Data Received", data, len);
 
-	return len;
+		return len;
+	}
+
+	// Drain everything the socket has. Voice frames are queued in the jitter
+	// buffer, polls are returned straight away.
+	for (;;) {
+		int len = m_socket.read(m_buffer, BUFFER_LENGTH, address, port);
+		if (len <= 0)
+			break;
+
+		// Invalid packet type?
+		if (::memcmp(m_buffer, "NXDN", 4U) != 0)
+			continue;
+
+		if (m_debug)
+			CUtils::dump(1U, "NXDN Network Data Received", m_buffer, len);
+
+		if (len == (int)NXDN_VOICE_LENGTH) {
+			m_delayBuffer->addData(m_buffer, NXDN_VOICE_LENGTH);
+		} else if (len == (int)NXDN_POLL_LENGTH) {
+			::memcpy(data, m_buffer, NXDN_POLL_LENGTH);
+			return NXDN_POLL_LENGTH;
+		}
+	}
+
+	// Hand out the next voice frame, repeating the last one if the buffer has
+	// run dry while a transmission is in progress.
+	unsigned int length = 0U;
+	if (m_delayBuffer->getData(data, length) != BS_NO_DATA)
+		return length;
+
+	return 0U;
+}
+
+void CNXDNNetwork::clock(unsigned int ms)
+{
+	if (m_delayBuffer != NULL)
+		m_delayBuffer->clock(ms);
+}
+
+void CNXDNNetwork::reset()
+{
+	if (m_delayBuffer != NULL)
+		m_delayBuffer->reset();
 }
 
 bool CNXDNNetwork::writePoll(unsigned short tg)

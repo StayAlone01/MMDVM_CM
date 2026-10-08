@@ -28,7 +28,9 @@
 
 class CDelayBuffer {
 public:
-	CDelayBuffer(const std::string& name, unsigned int blockSize, unsigned int blockTime, unsigned int jitterTime, bool debug);
+	// repeatLast == true makes a starved buffer always repeat the last frame
+	// instead of falling back to a DMR silence frame.
+	CDelayBuffer(const std::string& name, unsigned int blockSize, unsigned int blockTime, unsigned int jitterTime, bool debug, bool repeatLast = false);
 	~CDelayBuffer();
 
 	bool addData(const unsigned char* data, unsigned int length);
@@ -44,6 +46,7 @@ private:
 	unsigned int m_blockSize;
 	unsigned int m_blockTime;
 	bool         m_debug;
+	bool         m_repeatLast;
 	CTimer       m_timer;
 	CStopWatch   m_stopWatch;
 	bool         m_running;

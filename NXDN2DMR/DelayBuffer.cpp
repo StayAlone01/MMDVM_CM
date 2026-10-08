@@ -25,11 +25,12 @@
 #include <cassert>
 #include <cstring>
 
-CDelayBuffer::CDelayBuffer(const std::string& name, unsigned int blockSize, unsigned int blockTime, unsigned int jitterTime, bool debug) :
+CDelayBuffer::CDelayBuffer(const std::string& name, unsigned int blockSize, unsigned int blockTime, unsigned int jitterTime, bool debug, bool repeatLast) :
 m_name(name),
 m_blockSize(blockSize),
 m_blockTime(blockTime),
 m_debug(debug),
+m_repeatLast(repeatLast),
 m_timer(1000U, 0U, jitterTime),
 m_stopWatch(),
 m_running(false),
@@ -107,7 +108,7 @@ B_STATUS CDelayBuffer::getData(unsigned char* data, unsigned int& length)
 
 	// Return the last data frame if we have it
 	if (m_lastDataLength > 0U) {
-		if(m_lastDataValid) {
+		if (m_lastDataValid || m_repeatLast) {
 			if (m_debug)
 				LogDebug("%s, DelayBuffer: returning the last received frame", m_name.c_str());
 			// Copy last valid data

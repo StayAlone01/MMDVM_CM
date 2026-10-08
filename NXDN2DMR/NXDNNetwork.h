@@ -20,6 +20,7 @@
 #if !defined(NXDNNETWORK_H)
 #define	NXDNNETWORK_H
 
+#include "DelayBuffer.h"
 #include "NXDNDefines.h"
 #include "UDPSocket.h"
 
@@ -28,7 +29,7 @@
 
 class CNXDNNetwork {
 public:
-	CNXDNNetwork(const std::string& address, unsigned int port, const std::string& callsign, bool debug);
+	CNXDNNetwork(const std::string& address, unsigned int port, const std::string& callsign, bool debug, unsigned int jitter);
 	~CNXDNNetwork();
 
 	bool open();
@@ -44,6 +45,10 @@ public:
 
 	unsigned int read(unsigned char* data);
 
+	void clock(unsigned int ms);
+
+	void reset();
+
 	void close();
 
 private:
@@ -52,6 +57,9 @@ private:
 	bool            m_debug;
 	in_addr         m_address;
 	unsigned int    m_port;
+	unsigned int    m_jitter;
+	CDelayBuffer*   m_delayBuffer;
+	unsigned char*  m_buffer;
 };
 
 #endif

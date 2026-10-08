@@ -40,6 +40,7 @@ public:
   unsigned int getLocalPort() const;
   unsigned int getDefaultID() const;
   bool         getDaemon() const;
+  unsigned int getNXDNNetworkJitter() const;
 
   // The Info section
   unsigned int getRxFrequency() const;
@@ -92,6 +93,7 @@ private:
   unsigned int m_localPort;
   unsigned int m_defaultID;
   bool         m_daemon;
+  unsigned int m_nxdnNetworkJitter;
 
   unsigned int m_rxFrequency;
   unsigned int m_txFrequency;
