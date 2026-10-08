@@ -29,7 +29,7 @@
 
 class CNXDNNetwork {
 public:
-	CNXDNNetwork(const std::string& address, unsigned int port, const std::string& callsign, bool debug, unsigned int jitter);
+	CNXDNNetwork(const std::string& address, unsigned int port, const std::string& callsign, bool debug, unsigned int jitter, bool repeat);
 	~CNXDNNetwork();
 
 	bool open();
@@ -58,6 +58,7 @@ private:
 	in_addr         m_address;
 	unsigned int    m_port;
 	unsigned int    m_jitter;
+	bool            m_repeat;
 	CDelayBuffer*   m_delayBuffer;
 	unsigned char*  m_buffer;
 };

@@ -38,13 +38,14 @@ const unsigned int NXDN_VOICE_LENGTH = 43U;
 // The length of a NXDN poll packet (NXDNP).
 const unsigned int NXDN_POLL_LENGTH = 17U;
 
-CNXDNNetwork::CNXDNNetwork(const std::string& address, unsigned int port, const std::string& callsign, bool debug, unsigned int jitter) :
+CNXDNNetwork::CNXDNNetwork(const std::string& address, unsigned int port, const std::string& callsign, bool debug, unsigned int jitter, bool repeat) :
 m_socket(address, port),
 m_callsign(callsign),
 m_debug(debug),
 m_address(),
 m_port(0U),
 m_jitter(jitter),
+m_repeat(repeat),
 m_delayBuffer(NULL),
 m_buffer(NULL)
 {
@@ -54,6 +55,9 @@ m_buffer(NULL)
 	// converter behaves exactly as it did before it existed.
 	if (m_jitter > 0U) {
 		m_buffer      = new unsigned char[BUFFER_LENGTH];
+		// NXDN has no silence frame to fall back on, so the buffer always
+		// repeats the last frame. Whether a repeat is actually handed out is
+		// decided by the Repeat setting in read().
 		m_delayBuffer = new CDelayBuffer("NXDN", NXDN_VOICE_LENGTH, NXDN_FRAME_TIME, m_jitter, m_debug, true);
 	}
 }
@@ -177,10 +181,15 @@ unsigned int CNXDNNetwork::read(unsigned char* data)
 		}
 	}
 
-	// Hand out the next voice frame, repeating the last one if the buffer has
-	// run dry while a transmission is in progress.
+	// Hand out the next voice frame. A missing frame is only replaced by a
+	// repeat of the last one when the Repeat setting asks for it, otherwise the
+	// gap is left alone.
 	unsigned int length = 0U;
-	if (m_delayBuffer->getData(data, length) != BS_NO_DATA)
+	B_STATUS status = m_delayBuffer->getData(data, length);
+	if (status == BS_DATA)
+		return length;
+
+	if (status == BS_MISSING && m_repeat)
 		return length;
 
 	return 0U;

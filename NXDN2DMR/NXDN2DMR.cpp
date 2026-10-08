@@ -36,6 +36,12 @@
 // to arrive. Derived from the 12.5 frames/second used in the logs.
 #define NXDN_FRAME_TIME     80U
 
+// A voice packet is only treated as lost once it is a frame and a half past
+// due, so that ordinary network jitter and the ~5ms loop granularity do not
+// trigger a repeat. Repeating too eagerly duplicates speech, which is heard as
+// an echo, so it must only happen when a frame is genuinely missing.
+#define NXDN_LOST_TIME      (NXDN_FRAME_TIME + NXDN_FRAME_TIME / 2U)
+
 #define NXDNGW_DSTID_DEF    20U
 
 #define XLX_SLOT            2U
@@ -253,6 +259,7 @@ int CNXDN2DMR::run()
 	std::string localAddress = m_conf.getLocalAddress();
 	unsigned int localPort   = m_conf.getLocalPort();
 	unsigned int nxdnJitter  = m_conf.getNXDNNetworkJitter();
+	bool nxdnRepeat          = m_conf.getNXDNNetworkRepeat();
 
 	m_defaultID = m_conf.getDefaultID();
 
@@ -266,8 +273,12 @@ int CNXDN2DMR::run()
 		LogMessage("    Jitter: %ums", nxdnJitter);
 	else
 		LogMessage("    Jitter: disabled");
+	if (nxdnRepeat)
+		LogMessage("    Repeat last frame after: %ums", NXDN_LOST_TIME);
+	else
+		LogMessage("    Repeat last frame: disabled");
 
-	m_nxdnNetwork = new CNXDNNetwork(localAddress, localPort, m_callsign, debug, nxdnJitter);
+	m_nxdnNetwork = new CNXDNNetwork(localAddress, localPort, m_callsign, debug, nxdnJitter, nxdnRepeat);
 	m_nxdnNetwork->setDestination(dstAddress, dstPort);
 
 	ret = m_nxdnNetwork->open();
@@ -416,11 +427,11 @@ int CNXDN2DMR::run()
 		}
 
 		// NXDN receive concealment, used when no jitter buffer is configured
-		// (Jitter = 0). If the next voice packet is overdue while a transmission
-		// is live, feed the last one in again so the DMR output gets a frame
-		// instead of a hole. It is only repeated once per gap, the arrival of a
-		// fresh packet re-arms it.
-		if (nxdnJitter == 0U && m_nxdninfo && nxdnLastValid && nxdnRxWatch.elapsed() >= NXDN_FRAME_TIME) {
+		// (Jitter = 0). If the next voice packet is well overdue while a
+		// transmission is live, feed the last one in again so the DMR output
+		// gets a frame instead of a hole. It is only repeated once per gap, the
+		// arrival of a fresh packet re-arms it.
+		if (nxdnRepeat && nxdnJitter == 0U && m_nxdninfo && nxdnLastValid && nxdnRxWatch.elapsed() >= NXDN_LOST_TIME) {
 			LogDebug("NXDN, no voice packet for %ums, repeating the last one", nxdnRxWatch.elapsed());
 			m_conv.putNXDN(nxdnLastFrame + 10U);
 			nxdnLastValid = false;
